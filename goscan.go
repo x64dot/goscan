@@ -2,56 +2,127 @@ package main
 
 import (
 	"errors"
-	"fmt"
+	"flag"
 	"log"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 )
 
+var generalTimeout = time.Second * 3
+
 func main() {
 	var (
-		ip_target    string
-		port_to_scan string
+		targetIP  string
+		startPort string
+		endPort   string
+		scanAll   bool 
 	)
-	fmt.Println("Enter the ip address of the target you want to scan: ")
-	fmt.Scanln(&ip_target)
 
-	err := ValidateIP(ip_target)
-	if err != nil {
-		log.Fatalf("Invalid IP address: %v", err)
+	flag.StringVar(&targetIP, "ip", "", "IP address to scan")
+	flag.StringVar(&startPort, "p", "", "Start port to scan from | scan one port")
+	flag.StringVar(&endPort, "pp", "", "End port to stop scan from")
+	flag.BoolVar(&scanAll, "ap", false, "Scan all ports") 
+
+	flag.Parse()
+	if targetIP == "" {
+		log.Fatal("[!] Please enter an IP address.")
 	}
 
-	fmt.Println("Enter the port of the ip address you want to scan: ")
-	fmt.Scanln(&port_to_scan)
-
-	dummy_port_to_scan, err := strconv.Atoi(port_to_scan)
-
+	err := ValidateIP(targetIP)
 	if err != nil {
-		log.Fatalf("Error converting port to integer: %v", err)
+		log.Fatalf("[!] %v", err)
 	}
 
-	if dummy_port_to_scan < 1 || dummy_port_to_scan > 65535 {
-		log.Fatal("[!] Invalid port. You cannot specify a port higher than 65535 or port 0!")
+	if len(startPort) > 0 && endPort == "" {
+		err := ScanOnePort(targetIP, startPort)
+
+		if err == nil {
+			log.Printf("[+] Port: %v is open!", startPort)
+		} else {
+			log.Printf("[-] Port: %v is closed!", startPort)
+		}
 	}
 
-	time_out := time.Second * 3
-	conn, err := net.DialTimeout("tcp", ip_target+":"+port_to_scan, time_out)
+	if len(startPort) > 0 && len(endPort) > 0 {
+		err := ScanPorts(targetIP, startPort, endPort)
+		if err != nil {
+			log.Fatalf("[!] Error scanning ports: %v", err)
+		}
+	}
 
-	if err != nil {
-		log.Printf("[!] Port %v is not open:", port_to_scan)
-	} else {
-		log.Printf("[+] Port %v is open!", port_to_scan)
-		defer conn.Close()
+	if scanAll {
+		ScanAll(targetIP)
 	}
 }
 
-/* This function will simply check if the IP address provided is valid. */
-/* This function will also work for IPv4 and IPv6 addresses.*/
 func ValidateIP(ip string) error {
 	ipt := net.ParseIP(ip)
 	if ipt == nil {
-		return errors.New("IP address is invalid")
+		return errors.New("[!] IP address is invalid")
 	}
 	return nil
+}
+
+func ScanOnePort(ip string, port string) error {
+	conn, err := net.DialTimeout("tcp", ip+":"+port, generalTimeout)
+
+	if err == nil {
+		conn.Close()
+		return nil
+	} else {
+		return err
+	}
+}
+
+func ScanPorts(ip string, sport string, eport string) error {
+	startPort, err := strconv.Atoi(sport)
+	if err != nil {
+		log.Print()
+	}
+	endPort, err := strconv.Atoi(eport)
+	if err != nil {
+		log.Print()
+	}
+
+	var wg sync.WaitGroup
+
+	for ; startPort <= endPort; startPort++ {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			target := ip + ":" + strconv.Itoa(port)
+			conn, err := net.DialTimeout("tcp", target, generalTimeout)
+
+			if err == nil {
+				conn.Close()
+				log.Printf("[+] %v Port is open!\n", port)
+			}
+		}(startPort)
+	}
+
+	wg.Wait()
+	return nil
+}
+
+func ScanAll(ip string) {
+	var wg sync.WaitGroup
+
+	for port := 1; port < 65535; port++ {
+		wg.Add(1)
+		go func(port int) {
+			defer wg.Done()
+			target := ip + ":" + strconv.Itoa(port)
+			conn, err := net.DialTimeout("tcp", target, generalTimeout)
+
+			if err == nil {
+				conn.Close()
+				log.Printf("[+] %v Port is open!\n", port)
+			}
+
+		}(port)
+
+	}
+	wg.Wait()
 }
